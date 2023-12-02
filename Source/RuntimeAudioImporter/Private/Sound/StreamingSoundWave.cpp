@@ -12,112 +12,96 @@
 UStreamingSoundWave::UStreamingSoundWave(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	PlaybackFinishedBroadcast = true;
-
-	// No need to stop the sound after the end of streaming sound wave playback, assuming the PCM data can be filled after that
-	// (except if this is overridden in SetStopSoundOnPlaybackFinish)
-	bStopSoundOnPlaybackFinish = false;
-
-	// No need to loop streaming sound wave by default
-	bLooping = false;
-
-	// It is necessary to populate the sample rate and the number of channels to make the streaming wave playable even if there is no audio data
-	// (since the audio data may be filled in after the sound wave starts playing)
-	{
-		SetSampleRate(44100);
-		NumChannels = 2;
-	}
-
-	bFilledInitialAudioData = false;
-	NumOfPreAllocatedByteData = 0;
+	ReleaseMemory();
 }
 
 void UStreamingSoundWave::PopulateAudioDataFromDecodedInfo(FDecodedAudioStruct&& DecodedAudioInfo)
 {
-	FScopeLock Lock(&DataGuard);
-
-	if (!DecodedAudioInfo.IsValid())
 	{
-		UE_LOG(LogRuntimeAudioImporter, Error, TEXT("Unable to continue populating the audio data because the decoded info is invalid"));
-		return;
-	}
-
-	// Update the initial audio data if it hasn't already been filled in
-	if (!bFilledInitialAudioData)
-	{
-		SetSampleRate(DecodedAudioInfo.SoundWaveBasicInfo.SampleRate);
-		NumChannels = DecodedAudioInfo.SoundWaveBasicInfo.NumOfChannels;
-		bFilledInitialAudioData = true;
-	}
-
-	// Check if the number of channels and the sampling rate of the sound wave and the input audio data match
-	if (SampleRate != DecodedAudioInfo.SoundWaveBasicInfo.SampleRate || NumChannels != DecodedAudioInfo.SoundWaveBasicInfo.NumOfChannels)
-	{
-		Audio::FAlignedFloatBuffer WaveData(DecodedAudioInfo.PCMInfo.PCMData.GetView().GetData(), DecodedAudioInfo.PCMInfo.PCMData.GetView().Num());
-
-		// Resampling if needed
-		if (SampleRate != DecodedAudioInfo.SoundWaveBasicInfo.SampleRate)
+		FRAIScopeLock Lock(&DataGuard);
+		if (!DecodedAudioInfo.IsValid())
 		{
-			Audio::FAlignedFloatBuffer ResamplerOutputData;
-			if (!FRAW_RuntimeCodec::ResampleRAWData(WaveData, GetNumOfChannels(), GetSampleRate(), DecodedAudioInfo.SoundWaveBasicInfo.SampleRate, ResamplerOutputData))
-			{
-				UE_LOG(LogRuntimeAudioImporter, Error, TEXT("Unable to resample audio data to the sound wave's sample rate. Resampling failed"));
-				return;
-			}
-			WaveData = MoveTemp(ResamplerOutputData);
-		}
-
-		// Mixing the channels if needed
-		if (NumChannels != DecodedAudioInfo.SoundWaveBasicInfo.NumOfChannels)
-		{
-			Audio::FAlignedFloatBuffer WaveDataTemp;
-			if (!FRAW_RuntimeCodec::MixChannelsRAWData(WaveData, DecodedAudioInfo.SoundWaveBasicInfo.SampleRate, GetNumOfChannels(), DecodedAudioInfo.SoundWaveBasicInfo.NumOfChannels, WaveDataTemp))
-			{
-				UE_LOG(LogRuntimeAudioImporter, Error, TEXT("Unable to mix audio data to the sound wave's number of channels. Mixing failed"));
-				return;
-			}
-			WaveData = MoveTemp(WaveDataTemp);
-		}
-
-		DecodedAudioInfo.PCMInfo.PCMData = FRuntimeBulkDataBuffer<float>(WaveData);
-	}
-
-	// Do not reallocate the entire PCM buffer if it has free space to fill in
-	if (static_cast<uint64>(NumOfPreAllocatedByteData) >= DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float))
-	{
-		// This should be changed somehow to work with the new calculations
-		FMemory::Memcpy(reinterpret_cast<uint8*>(PCMBufferInfo->PCMData.GetView().GetData()) + ((PCMBufferInfo->PCMData.GetView().Num() * sizeof(float)) - NumOfPreAllocatedByteData), DecodedAudioInfo.PCMInfo.PCMData.GetView().GetData(), DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float));
-		NumOfPreAllocatedByteData -= DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float);
-		NumOfPreAllocatedByteData = NumOfPreAllocatedByteData < 0 ? 0 : NumOfPreAllocatedByteData;
-	}
-	else
-	{
-		const int64 NewPCMDataSize = ((PCMBufferInfo->PCMData.GetView().Num() * sizeof(float)) + (DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float)) - NumOfPreAllocatedByteData) / sizeof(float);
-		float* NewPCMDataPtr = static_cast<float*>(FMemory::Malloc(NewPCMDataSize * sizeof(float)));
-
-		if (!NewPCMDataPtr)
-		{
+			UE_LOG(LogRuntimeAudioImporter, Error, TEXT("Unable to continue populating the audio data because the decoded info is invalid"));
 			return;
 		}
 
-		// Adding new PCM data at the end
+		// Update the initial audio data if it hasn't already been filled in
+		if (!bFilledInitialAudioData)
 		{
-			FMemory::Memcpy(NewPCMDataPtr, PCMBufferInfo->PCMData.GetView().GetData(), (PCMBufferInfo->PCMData.GetView().Num() * sizeof(float)) - NumOfPreAllocatedByteData);
-			FMemory::Memcpy(reinterpret_cast<uint8*>(NewPCMDataPtr) + ((PCMBufferInfo->PCMData.GetView().Num() * sizeof(float)) - NumOfPreAllocatedByteData), DecodedAudioInfo.PCMInfo.PCMData.GetView().GetData(), DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float));
+			SetSampleRate(DecodedAudioInfo.SoundWaveBasicInfo.SampleRate);
+			NumChannels = DecodedAudioInfo.SoundWaveBasicInfo.NumOfChannels;
+			bFilledInitialAudioData = true;
 		}
 
-		PCMBufferInfo->PCMData = FRuntimeBulkDataBuffer<float>(NewPCMDataPtr, NewPCMDataSize);
-		NumOfPreAllocatedByteData = 0;
-	}
+		// Check if the number of channels and the sampling rate of the sound wave and the input audio data match
+		if (SampleRate != DecodedAudioInfo.SoundWaveBasicInfo.SampleRate || NumChannels != DecodedAudioInfo.SoundWaveBasicInfo.NumOfChannels)
+		{
+			Audio::FAlignedFloatBuffer WaveData(DecodedAudioInfo.PCMInfo.PCMData.GetView().GetData(), DecodedAudioInfo.PCMInfo.PCMData.GetView().Num());
 
-	PCMBufferInfo->PCMNumOfFrames += DecodedAudioInfo.PCMInfo.PCMNumOfFrames;
-	Duration += DecodedAudioInfo.SoundWaveBasicInfo.Duration;
-	ResetPlaybackFinish();
+			// Resampling if needed
+			if (SampleRate != DecodedAudioInfo.SoundWaveBasicInfo.SampleRate)
+			{
+				Audio::FAlignedFloatBuffer ResamplerOutputData;
+				if (!FRAW_RuntimeCodec::ResampleRAWData(WaveData, GetNumOfChannels(), GetSampleRate(), DecodedAudioInfo.SoundWaveBasicInfo.SampleRate, ResamplerOutputData))
+				{
+					UE_LOG(LogRuntimeAudioImporter, Error, TEXT("Unable to resample audio data to the sound wave's sample rate. Resampling failed"));
+					return;
+				}
+				WaveData = MoveTemp(ResamplerOutputData);
+			}
+
+			// Mixing the channels if needed
+			if (NumChannels != DecodedAudioInfo.SoundWaveBasicInfo.NumOfChannels)
+			{
+				Audio::FAlignedFloatBuffer WaveDataTemp;
+				if (!FRAW_RuntimeCodec::MixChannelsRAWData(WaveData, DecodedAudioInfo.SoundWaveBasicInfo.SampleRate, GetNumOfChannels(), DecodedAudioInfo.SoundWaveBasicInfo.NumOfChannels, WaveDataTemp))
+				{
+					UE_LOG(LogRuntimeAudioImporter, Error, TEXT("Unable to mix audio data to the sound wave's number of channels. Mixing failed"));
+					return;
+				}
+				WaveData = MoveTemp(WaveDataTemp);
+			}
+
+			DecodedAudioInfo.PCMInfo.PCMData = FRuntimeBulkDataBuffer<float>(WaveData);
+		}
+
+		// Do not reallocate the entire PCM buffer if it has free space to fill in
+		if (static_cast<uint64>(NumOfPreAllocatedByteData) >= DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float))
+		{
+			// This should be changed somehow to work with the new calculations
+			FMemory::Memcpy(reinterpret_cast<uint8*>(PCMBufferInfo->PCMData.GetView().GetData()) + ((PCMBufferInfo->PCMData.GetView().Num() * sizeof(float)) - NumOfPreAllocatedByteData), DecodedAudioInfo.PCMInfo.PCMData.GetView().GetData(), DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float));
+			NumOfPreAllocatedByteData -= DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float);
+			NumOfPreAllocatedByteData = NumOfPreAllocatedByteData < 0 ? 0 : NumOfPreAllocatedByteData;
+		}
+		else
+		{
+			const int64 NewPCMDataSize = ((PCMBufferInfo->PCMData.GetView().Num() * sizeof(float)) + (DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float)) - NumOfPreAllocatedByteData) / sizeof(float);
+			float* NewPCMDataPtr = static_cast<float*>(FMemory::Malloc(NewPCMDataSize * sizeof(float)));
+
+			if (!NewPCMDataPtr)
+			{
+				return;
+			}
+
+			// Adding new PCM data at the end
+			{
+				FMemory::Memcpy(NewPCMDataPtr, PCMBufferInfo->PCMData.GetView().GetData(), (PCMBufferInfo->PCMData.GetView().Num() * sizeof(float)) - NumOfPreAllocatedByteData);
+				FMemory::Memcpy(reinterpret_cast<uint8*>(NewPCMDataPtr) + ((PCMBufferInfo->PCMData.GetView().Num() * sizeof(float)) - NumOfPreAllocatedByteData), DecodedAudioInfo.PCMInfo.PCMData.GetView().GetData(), DecodedAudioInfo.PCMInfo.PCMData.GetView().Num() * sizeof(float));
+			}
+
+			PCMBufferInfo->PCMData = FRuntimeBulkDataBuffer<float>(NewPCMDataPtr, NewPCMDataSize);
+			NumOfPreAllocatedByteData = 0;
+		}
+
+		PCMBufferInfo->PCMNumOfFrames += DecodedAudioInfo.PCMInfo.PCMNumOfFrames;
+		Duration += DecodedAudioInfo.SoundWaveBasicInfo.Duration;
+		ResetPlaybackFinish();
+	}
 
 	{
 		const bool IsBound = [this]()
 		{
-			FScopeLock Lock(&OnPopulateAudioData_DataGuard);
+			FRAIScopeLock Lock(&OnPopulateAudioData_DataGuard);
 			return OnPopulateAudioDataNative.IsBound() || OnPopulateAudioData.IsBound();
 		}();
 		if (IsBound)
@@ -127,7 +111,7 @@ void UStreamingSoundWave::PopulateAudioDataFromDecodedInfo(FDecodedAudioStruct&&
 			{
 				if (WeakThis.IsValid())
 				{
-					FScopeLock Lock(&WeakThis->OnPopulateAudioData_DataGuard);
+					FRAIScopeLock Lock(&WeakThis->OnPopulateAudioData_DataGuard);
 					if (WeakThis->OnPopulateAudioDataNative.IsBound())
 					{
 						WeakThis->OnPopulateAudioDataNative.Broadcast(PCMData);
@@ -148,7 +132,7 @@ void UStreamingSoundWave::PopulateAudioDataFromDecodedInfo(FDecodedAudioStruct&&
 	{
 		const bool IsBound = [this]()
 		{
-			FScopeLock Lock(&OnPopulateAudioData_DataGuard);
+			FRAIScopeLock Lock(&OnPopulateAudioData_DataGuard);
 			return OnPopulateAudioStateNative.IsBound() || OnPopulateAudioState.IsBound();
 		}();
 		if (IsBound)
@@ -157,7 +141,7 @@ void UStreamingSoundWave::PopulateAudioDataFromDecodedInfo(FDecodedAudioStruct&&
 			{
 				if (WeakThis.IsValid())
 				{
-					FScopeLock Lock(&WeakThis->OnPopulateAudioData_DataGuard);
+					FRAIScopeLock Lock(&WeakThis->OnPopulateAudioData_DataGuard);
 					WeakThis->OnPopulateAudioStateNative.Broadcast();
 					WeakThis->OnPopulateAudioState.Broadcast();
 				}
@@ -181,12 +165,32 @@ void UStreamingSoundWave::PopulateAudioDataFromDecodedInfo(FDecodedAudioStruct&&
 void UStreamingSoundWave::ReleaseMemory()
 {
 	Super::ReleaseMemory();
+
+	PlaybackFinishedBroadcast = true;
+
+	// No need to stop the sound after the end of streaming sound wave playback, assuming the PCM data can be filled after that
+	// (except if this is overridden in SetStopSoundOnPlaybackFinish)
+	bStopSoundOnPlaybackFinish = false;
+
+	// No need to loop streaming sound wave by default
+	bLooping = false;
+
+	// It is necessary to populate the sample rate and the number of channels to make the streaming wave playable even if there is no audio data
+	// (since the audio data may be filled in after the sound wave starts playing)
+	{
+		SetSampleRate(44100);
+		NumChannels = 2;
+	}
+
+	bFilledInitialAudioData = false;
+	NumOfPreAllocatedByteData = 0;
+	bFilledInitialAudioData = false;
 	NumOfPreAllocatedByteData = 0;
 }
 
 void UStreamingSoundWave::ReleasePlayedAudioData(const FOnPlayedAudioDataReleaseResultNative& Result)
 {
-	FScopeLock Lock(&DataGuard);
+	FRAIScopeLock Lock(&DataGuard);
 	const int64 NewPCMDataSize = (PCMBufferInfo->PCMNumOfFrames - GetNumOfPlayedFrames_Internal()) * NumChannels;
 
 	if (GetNumOfPlayedFrames_Internal() > 0 && NumOfPreAllocatedByteData > 0 && NewPCMDataSize < PCMBufferInfo->PCMData.GetView().Num())
@@ -234,7 +238,7 @@ void UStreamingSoundWave::PreAllocateAudioData(int64 NumOfBytesToPreAllocate, co
 		return;
 	}
 		
-	FScopeLock Lock(&DataGuard);
+	FRAIScopeLock Lock(&DataGuard);
 
 	auto ExecuteResult = [Result](bool bSucceeded)
 	{
