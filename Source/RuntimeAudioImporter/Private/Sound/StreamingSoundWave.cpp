@@ -1,4 +1,4 @@
-﻿// Georgy Treshchev 2023.
+// Georgy Treshchev 2023.
 
 #include "Sound/StreamingSoundWave.h"
 
