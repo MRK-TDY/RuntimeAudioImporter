@@ -1,4 +1,4 @@
-﻿// Georgy Treshchev 2024.
+// Georgy Treshchev 2024.
 
 #include "Sound/StreamingSoundWave.h"
 
@@ -349,6 +349,12 @@ void UStreamingSoundWave::AppendAudioDataFromRAW(TArray<uint8> RAWData, ERuntime
 			SoundWaveBasicInfo.Duration = static_cast<float>(DecodedAudioInfo.PCMInfo.PCMNumOfFrames) / InSampleRate;
 		}
 		DecodedAudioInfo.SoundWaveBasicInfo = MoveTemp(SoundWaveBasicInfo);
+	}
+
+	if (!IsValid(this))
+	{
+		UE_LOG(LogRuntimeAudioImporter, Error, TEXT("Invalid Streaming Sound Wave instance"));
+		return;
 	}
 
 	PopulateAudioDataFromDecodedInfo(MoveTemp(DecodedAudioInfo));
